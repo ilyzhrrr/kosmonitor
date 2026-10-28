@@ -98,7 +98,10 @@ function Beranda({ user, room }) {
             <i key={i} className={i === 6 ? 'now' : ''} style={{ height: Math.max(6, (v / max) * 100) + '%' }} />
           ))}
         </div>
-        <div className="hero-label">{lastUpdate ? 'Diperbarui ' + lastUpdate.toLocaleTimeString('id-ID') : 'Menunggu data…'}</div>
+        <div className="hero-label">
+          {lastUpdate ? 'Diperbarui ' + lastUpdate.toLocaleTimeString('id-ID') : 'Menunggu data…'}
+          {tele?.status && ` · ${tele.status === 'warning' ? 'lolos validasi (ada peringatan)' : 'tervalidasi backend'}`}
+        </div>
       </section>
 
       <div className="metrics">

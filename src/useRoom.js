@@ -12,10 +12,12 @@ function loadAcc(key) {
   return { date: today(), today: 0, total: 0 }
 }
 
-// Satu koneksi MQTT per penghuni login. Topik mengikuti firmware ESP32:
-//   {base}/telemetry   JSON {voltage_v, current_a, power_w, load_percent, led1, led2}
-//   {base}/ledN/cmd    "ON" | "OFF"  (dikirim dashboard)
-//   {base}/ledN/state  "ON" | "OFF"  (dikirim ESP32)
+// Satu koneksi MQTT per penghuni login. Dashboard TIDAK membaca data mentah ESP32;
+// semua lewat backend kos-monitor-be yang memvalidasi data dulu:
+//   {base}/validated/telemetry   JSON {voltage_v, current_a, power_w, load_percent, led1, led2, status, warnings}
+//   {base}/validated/ledN/state  "ON" | "OFF"  (status lampu yang lolos validasi)
+//   {base}/validated/rejected    JSON {kind, errors, raw}  (data yang ditolak backend)
+//   {base}/request/ledN/cmd      "ON" | "OFF"  (dikirim dashboard; backend cek lalu teruskan ke ESP32)
 export function useRoom(user) {
   const [status, setStatus] = useState('connecting') // status broker: connecting | online | offline
   const [deviceOnline, setDeviceOnline] = useState(false) // true jika ada telemetry <5 detik terakhir
@@ -34,10 +36,12 @@ export function useRoom(user) {
 
   const base = user.mqttBase
   const topics = {
-    telemetry: `${base}/telemetry`,
-    cmd: (n) => `${base}/led${n}/cmd`,
-    state: (n) => `${base}/led${n}/state`,
+    telemetry: `${base}/validated/telemetry`,
+    rejected: `${base}/validated/rejected`,
+    cmd: (n) => `${base}/request/led${n}/cmd`,
+    state: (n) => `${base}/validated/led${n}/state`,
   }
+  const lastWarn = useRef('')
 
   const log = useCallback((m) => {
     setLogs((l) => [`[${new Date().toLocaleTimeString('id-ID')}] ${m}`, ...l].slice(0, 40))
@@ -103,7 +107,7 @@ export function useRoom(user) {
     c.on('connect', () => {
       setStatus('online')
       log(`Terhubung ke broker. Topik: ${base}/…`)
-      c.subscribe([topics.telemetry, topics.state(1), topics.state(2)], { qos: 0 }, (err) => {
+      c.subscribe([topics.telemetry, topics.rejected, topics.state(1), topics.state(2)], { qos: 0 }, (err) => {
         if (err) log('Subscribe gagal: ' + err.message)
       })
     })
@@ -114,7 +118,19 @@ export function useRoom(user) {
     c.on('message', (topic, msg) => {
       const payload = msg.toString()
       if (topic === topics.telemetry) {
-        try { onTele(JSON.parse(payload)) } catch { log('Telemetry bukan JSON valid.') }
+        try {
+          const d = JSON.parse(payload)
+          onTele(d)
+          // Catat peringatan validasi sekali saja, tidak tiap pesan.
+          const w = (d.warnings || []).join('; ')
+          if (w && w !== lastWarn.current) log('Peringatan validasi: ' + w)
+          lastWarn.current = w
+        } catch { log('Telemetry bukan JSON valid.') }
+      } else if (topic === topics.rejected) {
+        try {
+          const r = JSON.parse(payload)
+          log(`Data DITOLAK backend (${r.kind}): ${(r.errors || []).join('; ')}`)
+        } catch { /* abaikan */ }
       } else if (topic === topics.state(1)) setLamps((l) => ({ ...l, 1: payload.trim().toUpperCase() === 'ON' }))
       else if (topic === topics.state(2)) setLamps((l) => ({ ...l, 2: payload.trim().toUpperCase() === 'ON' }))
     })
